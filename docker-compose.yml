@@ -1,0 +1,26 @@
+# Local stack for the automation side: n8n + Mailpit (a fake inbox at http://localhost:8025).
+# Convex and Clerk run in their own clouds; n8n talks to Convex over HTTPS.
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    ports: ["5678:5678"]
+    environment:
+      - N8N_HOST=localhost
+      - WEBHOOK_URL=http://localhost:5678/
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:?set N8N_ENCRYPTION_KEY in .env}
+      - GENERIC_TIMEZONE=UTC
+      # Code nodes need crypto (HMAC) and read the shared secret from the environment.
+      - NODE_FUNCTION_ALLOW_BUILTIN=crypto
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_SHARED_SECRET=${N8N_SHARED_SECRET:?set N8N_SHARED_SECRET in .env}
+      - CONVEX_SITE_URL=${CONVEX_SITE_URL:?set CONVEX_SITE_URL in .env}
+      - MAIL_FROM=lendloop@example.com
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n:/import:ro
+    depends_on: [mailpit]
+  mailpit:
+    image: axllent/mailpit:latest
+    ports: ["8025:8025", "1025:1025"]
+volumes:
+  n8n_data:

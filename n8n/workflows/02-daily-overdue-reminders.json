@@ -1,0 +1,331 @@
+{
+  "id": "lendloopReminder01",
+  "name": "LendLoop - Daily overdue reminders",
+  "nodes": [
+    {
+      "id": "b3185338-b45d-5dc6-8a9c-82a50cf247bc",
+      "name": "Every day at 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "5d1d7bd9-4aec-5f51-9eb5-1e4738164c2c",
+      "name": "Run now (manual)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "ef8d04c3-e7ca-5076-8550-9769835319ff",
+      "name": "Sign request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.N8N_SHARED_SECRET;\nif (!secret) throw new Error('N8N_SHARED_SECRET is not set');\nconst ts = String(Date.now());\nconst method = 'GET';\nconst path = '/n8n/overdue-loans';\nconst body = '';\nconst signature = crypto.createHmac('sha256', secret).update(`${ts}.${method}.${path}.${body}`).digest('hex');\nreturn [{ json: { ts, signature, body, extra: null } }];"
+      }
+    },
+    {
+      "id": "19b4fb30-2bb3-5886-9299-7048b12bfb30",
+      "name": "Fetch overdue loans",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/overdue-loans",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-timestamp",
+              "value": "={{ $json.ts }}"
+            },
+            {
+              "name": "x-lendloop-signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "e51dd69a-341c-5c8e-abfc-246b3cdf997f",
+      "name": "Each overdue loan",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "parameters": {
+        "fieldToSplitOut": "loans",
+        "options": {}
+      }
+    },
+    {
+      "id": "d93eb5c0-5430-57b3-8916-b5045ffc4460",
+      "name": "Send reminder",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        0
+      ],
+      "parameters": {
+        "fromEmail": "={{ $env.MAIL_FROM || 'lendloop@example.com' }}",
+        "toEmail": "={{ $json.borrower.email }}",
+        "subject": "=Reminder: please return {{ $json.toolName }}",
+        "emailFormat": "text",
+        "text": "=Hi {{ $json.borrower.name }},\n\nYour loan of {{ $json.toolName }} was due on {{ $json.dueDate }} ({{ $json.daysOverdue }} day(s) ago). Please return it to its owner as soon as you can.\n\nLendLoop",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "smtp": {
+          "id": "lendloopSmtp01",
+          "name": "LendLoop SMTP"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "ab4071fa-c79d-5ee7-bc52-3e1944f9cacd",
+      "name": "Result: sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.N8N_SHARED_SECRET;\nconst loan = $('Each overdue loan').item.json;\nconst ts = String(Date.now());\nconst body = JSON.stringify({ key: loan.reminderKey, status: 'sent' });\nconst signature = crypto.createHmac('sha256', secret).update(`${ts}.POST./n8n/reminder-result.${body}`).digest('hex');\nreturn [{ json: { ts, signature, body } }];"
+      }
+    },
+    {
+      "id": "060b3d00-62b1-5c7f-b8be-f36bb4e62462",
+      "name": "Result: failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        100
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.N8N_SHARED_SECRET;\nconst loan = $('Each overdue loan').item.json;\nconst ts = String(Date.now());\nconst body = JSON.stringify({ key: loan.reminderKey, status: 'failed', detail: String($json.error && $json.error.message || 'email failed') });\nconst signature = crypto.createHmac('sha256', secret).update(`${ts}.POST./n8n/reminder-result.${body}`).digest('hex');\nreturn [{ json: { ts, signature, body } }];"
+      }
+    },
+    {
+      "id": "9502ee59-6e4a-5451-9270-d54cb7ac39c3",
+      "name": "Record sent (idempotent)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/reminder-result",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-timestamp",
+              "value": "={{ $json.ts }}"
+            },
+            {
+              "name": "x-lendloop-signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "fc5fbc2f-5451-5daa-a04c-821d32042232",
+      "name": "Record failure (idempotent)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/reminder-result",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-timestamp",
+              "value": "={{ $json.ts }}"
+            },
+            {
+              "name": "x-lendloop-signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Every day at 09:00": {
+      "main": [
+        [
+          {
+            "node": "Sign request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now (manual)": {
+      "main": [
+        [
+          {
+            "node": "Sign request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign request": {
+      "main": [
+        [
+          {
+            "node": "Fetch overdue loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch overdue loans": {
+      "main": [
+        [
+          {
+            "node": "Each overdue loan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Each overdue loan": {
+      "main": [
+        [
+          {
+            "node": "Send reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send reminder": {
+      "main": [
+        [
+          {
+            "node": "Result: sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Result: failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Result: sent": {
+      "main": [
+        [
+          {
+            "node": "Record sent (idempotent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Result: failed": {
+      "main": [
+        [
+          {
+            "node": "Record failure (idempotent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "lendloopErrHandler01",
+    "saveDataErrorExecution": "all"
+  },
+  "active": false,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

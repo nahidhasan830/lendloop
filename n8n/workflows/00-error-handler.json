@@ -1,0 +1,99 @@
+{
+  "id": "lendloopErrHandler01",
+  "name": "LendLoop - Error handler",
+  "nodes": [
+    {
+      "id": "385d8052-a076-5655-8ed0-0237444f7c74",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "f3d10b06-22a9-5485-9099-fa3e64f97560",
+      "name": "Sign failure report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.N8N_SHARED_SECRET;\nconst e = $input.first().json;\nconst ts = String(Date.now());\nconst body = JSON.stringify({\n  executionId: String(e.execution && e.execution.id || Date.now()),\n  workflow: String(e.workflow && e.workflow.name || 'unknown'),\n  message: String(e.execution && e.execution.error && e.execution.error.message || 'unknown error').slice(0, 250),\n});\nconst signature = crypto.createHmac('sha256', secret).update(`${ts}.POST./n8n/failure.${body}`).digest('hex');\nreturn [{ json: { ts, signature, body } }];"
+      }
+    },
+    {
+      "id": "fb05d6c1-a216-5184-8ba5-1b89ec6e2db1",
+      "name": "Report failure to LendLoop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/failure",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-lendloop-timestamp",
+              "value": "={{ $json.ts }}"
+            },
+            {
+              "name": "x-lendloop-signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}"
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Sign failure report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign failure report": {
+      "main": [
+        [
+          {
+            "node": "Report failure to LendLoop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

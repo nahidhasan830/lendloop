@@ -1,0 +1,291 @@
+{
+  "id": "lendloopNotify001",
+  "name": "LendLoop - Loan status notifications",
+  "nodes": [
+    {
+      "id": "b9a6049b-774d-5868-a405-c813c633ea84",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-status",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "001c7802-39ae-5fbc-bbe8-adfdd97e7b44"
+    },
+    {
+      "id": "ed60208c-61e2-5ca3-b431-ea34f47aa8d7",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Verify the HMAC signature Convex put on the request, and reject stale timestamps (replay protection).\nconst crypto = require('crypto');\nconst item = $input.first().json;\nconst secret = $env.N8N_SHARED_SECRET;\nconst ts = item.headers['x-lendloop-timestamp'];\nconst sig = item.headers['x-lendloop-signature'];\nlet ok = false;\nif (secret && ts && sig && Math.abs(Date.now() - Number(ts)) < 5 * 60 * 1000) {\n  const expected = Buffer.from(crypto.createHmac('sha256', secret).update(`${ts}.${JSON.stringify(item.body)}`).digest('hex'));\n  const given = Buffer.from(String(sig).toLowerCase());\n  ok = expected.length === given.length && crypto.timingSafeEqual(expected, given);\n}\nreturn [{ json: { ok, body: ok ? item.body : null } }];"
+      }
+    },
+    {
+      "id": "cccf90a4-2170-5854-ba64-318ce784f0cb",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "027eb444-bfc5-5f85-9f34-eb09aaaad16d",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "22a9bc79-ed49-5bde-9f89-3443f96a4f08",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        660,
+        160
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {error: 'invalid signature'} }}",
+        "options": {
+          "responseCode": 401
+        }
+      }
+    },
+    {
+      "id": "27bb4cc5-23d3-55d5-9228-9411f1f0a2fe",
+      "name": "Build email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "// Build the email for one event. Skip events we already delivered (Convex may retry a delivery).\nconst { eventId, event, loan, recipient } = $input.first().json.body;\nconst seen = $getWorkflowStaticData('global');\nseen.done = seen.done || {};\nif (seen.done[eventId]) return [{ json: { skip: true, eventId } }];\nif (!recipient.email) return [{ json: { skip: true, eventId, reason: 'recipient has no email' } }];\nconst dates = `${loan.startDate} to ${loan.endDate}`;\nconst t = {\n  requested:       ['New request for your ' + loan.toolName, `Someone would like to borrow your ${loan.toolName} (${dates}). Open LendLoop to approve or decline.`],\n  withdrawn:       ['Request withdrawn: ' + loan.toolName, `The request to borrow your ${loan.toolName} (${dates}) was withdrawn.`],\n  approved:        ['Approved: ' + loan.toolName, `Good news, your request for ${loan.toolName} (${dates}) was approved.`],\n  declined:        ['Declined: ' + loan.toolName, `Your request for ${loan.toolName} (${dates}) was declined.`],\n  returned:        ['Returned: ' + loan.toolName, `${loan.toolName} was marked as returned. Thanks for taking care of it.`],\n  listing_removed: ['Listing removed: ' + loan.toolName, `Your request for ${loan.toolName} (${dates}) was cancelled because the listing was removed.`],\n}[event];\nif (!t) throw new Error('Unknown event: ' + event);\nreturn [{ json: { skip: false, eventId, to: recipient.email, subject: t[0], text: `Hi ${recipient.name},\\n\\n${t[1]}\\n\\nLendLoop` } }];"
+      }
+    },
+    {
+      "id": "2c246c5d-8c66-5d6b-bb64-a0c69dc39117",
+      "name": "Already sent or nothing to send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        -80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "f75162ba-b1f7-590e-ae0d-1a1f497980c4",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b746ae56-0938-59c1-92ec-01dd2dc9a2ca",
+      "name": "Send email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1100,
+        20
+      ],
+      "parameters": {
+        "fromEmail": "={{ $env.MAIL_FROM || 'lendloop@example.com' }}",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "smtp": {
+          "id": "lendloopSmtp01",
+          "name": "LendLoop SMTP"
+        }
+      }
+    },
+    {
+      "id": "7ecbe4f0-429a-5e3b-b6de-c3c4b16de329",
+      "name": "Mark delivered",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        20
+      ],
+      "parameters": {
+        "jsCode": "const seen = $getWorkflowStaticData('global');\nseen.done = seen.done || {};\nconst id = $('Build email').first().json.eventId;\nseen.done[id] = Date.now();\nconst keys = Object.keys(seen.done);\nif (keys.length > 500) keys.sort((a, b) => seen.done[a] - seen.done[b]).slice(0, keys.length - 500).forEach((k) => delete seen.done[k]);\nreturn [{ json: { ok: true } }];"
+      }
+    },
+    {
+      "id": "b0bef31a-b55f-5bc6-8094-d3440d6e22eb",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1540,
+        -80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ {ok: true} }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Build email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build email": {
+      "main": [
+        [
+          {
+            "node": "Already sent or nothing to send?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already sent or nothing to send?": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send email": {
+      "main": [
+        [
+          {
+            "node": "Mark delivered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark delivered": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "lendloopErrHandler01",
+    "saveDataErrorExecution": "all"
+  },
+  "active": false,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
